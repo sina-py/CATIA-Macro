@@ -1,0 +1,53 @@
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc
+    Dim oDrawingSheet
+    Dim oDrawingView
+    Dim oDrawingText
+    Dim oBackgroundSheet
+    Dim oTexts
+    Dim oTextToReplace
+    Dim currentDate
+    Dim dayStr, monthStr, yearStr
+
+    ' Formulate the current date as a string: DD-MMM-YYYY
+    dayStr = Day(Date)
+    monthStr = MonthName(Month(Date), True)
+    yearStr = Year(Date)
+    currentDate = dayStr & "-" & monthStr & "-" & yearStr
+
+    ' Error handling
+    On Error Resume Next
+
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+
+    ' Check if the active document is valid
+    If Err.Number <> 0 Or oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the background sheet
+    Set oBackgroundSheet = oDrawingDoc.Sheets.Item("Background View")
+    If Err.Number <> 0 Then
+        MsgBox "No background sheet found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get all text objects from the background sheet
+    Set oTexts = oBackgroundSheet.Views.Item("Background View").Texts
+
+    ' Loop through all text objects and find Text54
+    For i = 1 To oTexts.Count
+        Set oTextToReplace = oTexts.Item(i)
+        If oTextToReplace.Name = "Text54" Then
+            ' Replace the text with the current date
+            oTextToReplace.Text = currentDate
+            Exit For
+        End If
+    Next
+
+    ' Confirm completion
+    MsgBox "Text54 updated with the current date in the background sheet.", vbInformation
+End Sub

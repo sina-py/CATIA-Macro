@@ -1,0 +1,58 @@
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc
+    Dim oDrawingSheet
+    Dim oBackgroundView
+    Dim oTables
+    Dim oTable
+    Dim oCell
+    Dim currentDate
+    Dim dayStr, monthStr, yearStr
+    
+    ' Get the current date formatted as DD-MMM-YYYY
+    dayStr = Day(Date)
+    monthStr = MonthName(Month(Date), True)
+    yearStr = Year(Date)
+    currentDate = dayStr & "-" & monthStr & "-" & yearStr
+
+    ' Error handling
+    On Error Resume Next
+
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+    If Err.Number <> 0 Or oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the active sheet
+    Set oDrawingSheet = oDrawingDoc.Sheets.ActiveSheet
+    If Err.Number <> 0 Then
+        MsgBox "No active drawing sheet found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Switch to the background view of the sheet
+    Set oBackgroundView = oDrawingSheet.Views.Item("Background View")
+    If oBackgroundView Is Nothing Then
+        MsgBox "Background view not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the table collection in the background view
+    Set oTables = oBackgroundView.Tables
+    If oTables.Count = 0 Then
+        MsgBox "No tables found in the background view.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Access the first table (adjust this if you need a specific table)
+    'Set oTable = oTables.Item(1) ' Modify this to select a different table if needed
+
+    ' Insert the current date into the first cell (row 1, column 1)
+    'Set oCell = oTable.GetCellObject(1, 1) ' Modify row and column as needed
+  Text54.text = currentDate
+
+    ' Confirm completion
+    MsgBox "Current date inserted into the table in the background.", vbInformation
+End Sub

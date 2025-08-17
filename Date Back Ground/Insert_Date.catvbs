@@ -1,0 +1,53 @@
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc
+    Dim oDrawingSheet
+    Dim oDrawingView
+    Dim oDrawingText
+    Dim xPosition
+    Dim yPosition
+    Dim currentDate
+
+    ' Set the position where the date will be inserted
+    xPosition = 100 ' Adjust X position as needed
+    yPosition = 100 ' Adjust Y position as needed
+
+    ' Formulate the current date as a string: DD-MMM-YYYY
+    Dim dayStr, monthStr, yearStr
+    dayStr = Day(Date)
+    monthStr = MonthName(Month(Date), True)
+    yearStr = Year(Date)
+    currentDate = dayStr & "-" & monthStr & "-" & yearStr
+    
+    ' Error handling
+    On Error Resume Next
+    
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+    
+    ' Check for errors or if the document is not valid
+    If Err.Number <> 0 Or oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Try to set the document as a DrawingDocument
+    Set oDrawingSheet = oDrawingDoc.Sheets.ActiveSheet
+    If Err.Number <> 0 Then
+        MsgBox "This is not a drawing document.", vbExclamation
+        Exit Sub
+    End If
+    On Error GoTo 0
+    
+    ' Get the active view
+    Set oDrawingView = oDrawingSheet.Views.ActiveView
+    
+    ' Add the date as a drawing text in the active view
+    Set oDrawingText = oDrawingView.Texts.Add(currentDate, xPosition, yPosition)
+    
+    ' Apply font size using the correct API method
+    'oDrawingText.SetFontSize 0, 1  ' Set font size to 12 (adjust as needed)
+
+    ' Confirm completion
+    MsgBox "Current date inserted into the drawing with the specified font size.", vbInformation
+End Sub

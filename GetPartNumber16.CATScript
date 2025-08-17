@@ -1,0 +1,971 @@
+Option Explicit
+
+'===============================================================
+' Main routine: Opens Excel, pre-calculates the needed capacity,
+' processes the CATIA assembly, and dumps the data into Excel.
+'===============================================================
+Sub CATMain()
+    Dim filePath As String
+    
+    ' Initialize Excel application
+    Dim oExcel As Object, oWorkbook As Object, oSheet As Object
+    Set oExcel = CreateObject("Excel.Application")
+    oExcel.Visible = False ' Change to True if you want to see Excel
+    Set oWorkbook = oExcel.Workbooks.Add
+    Set oSheet = oWorkbook.Sheets(1)
+    
+    ' Write header row to Excel
+    oSheet.Cells(1, 1).Value = "Level"
+    oSheet.Cells(1, 2).Value = "Product/Part Name"
+    oSheet.Cells(1, 3).Value = "Body Name"
+    oSheet.Cells(1, 4).Value = "Sections"
+	oSheet.Cells(1, 5).Value = "Job Number"
+    oSheet.Cells(1, 6).Value = "Assembly/Part" ' New Header
+	oSheet.Cells(1, 7).Value = "BOM" ' Modified BOM Column
+    
+    ' Get the active CATIA document (must be a Product/Assembly)
+    Dim oProdDoc As Object, oProduct As Object
+    On Error Resume Next
+    Set oProdDoc = CATIA.ActiveDocument
+    If Err.Number <> 0 Or oProdDoc Is Nothing Then
+        MsgBox "No active CATIA document found.", vbExclamation, "Error"
+        Exit Sub
+    End If
+    On Error GoTo 0
+    Set oProduct = oProdDoc.Product
+    
+    MsgBox "Starting to process the assembly hierarchy."
+    
+    '-----------------------------------------------------
+    ' Determine total row capacity using a recursive function.
+    '-----------------------------------------------------
+    Dim totalCapacity As Long
+    totalCapacity = CountItems(oProduct)
+    
+    ' Preallocate the dynamic array.
+    ' Rows: 1 to totalCapacity; Columns: 0 to 7
+    ' Column 0: Level, 1: Product/Part Name, 2: Body Name,
+    ' Columns 3-5: Sections (split from the name), 6: Assembly/Part
+    Dim dataArray() As Variant
+    ReDim dataArray(totalCapacity, 7) ' Increased to 7
+    Dim dataCount As Long
+    dataCount = 0
+    
+    ' Process the product hierarchy starting at level 1.
+    ProcessProduct oProduct, 1, dataArray, dataCount
+    
+    ' Write the data into Excel (starting at row 2, because row 1 has headers)
+    Dim i As Long
+    For i = 1 To dataCount
+        oSheet.Cells(i + 1, 1).Value = dataArray(i, 0) ' Level
+        oSheet.Cells(i + 1, 2).Value = dataArray(i, 1) ' Product/Part Name
+        oSheet.Cells(i + 1, 3).Value = dataArray(i, 2) ' Body Name
+        oSheet.Cells(i + 1, 4).Value = dataArray(i, 3) ' Sections
+		oSheet.Cells(i + 1, 5).Value = dataArray(i, 4) ' Job Number
+        oSheet.Cells(i + 1, 6).Value = dataArray(i, 5) ' Assembly/Part ' New Column
+		oSheet.Cells(i + 1, 7).Value = dataArray(i, 6) 'BOM 
+    Next
+    
+    oSheet.Columns("A:G").AutoFit
+    
+    filePath = "D:\Design\CATIA_Excel_Import\" & CStr(dataArray(1, 1)) & "_PartNumbers.xlsx"
+    ' Save and close the Excel file
+    oWorkbook.SaveAs filePath
+    oWorkbook.Close
+    oExcel.Quit
+    
+    ' Clean up
+    Set oSheet = Nothing
+    Set oWorkbook = Nothing
+    Set oExcel = Nothing
+    
+    MsgBox "Data successfully saved to Excel file: " & filePath
+End Sub
+
+'===============================================================
+' ProcessProduct:
+' Recursively traverses the product tree.
+' For each Product/Assembly, it writes a row (with Level and Name).
+' For Parts (CATPart), it writes a row for the part and then one for
+' each Body (skipping the sole "PartBody"). Subassemblies are recursed.
+'===============================================================
+Sub ProcessProduct(oProd As Object, level As Integer, ByRef dataArray() As Variant, ByRef dataCount As Long)
+    Dim hasChildren As Boolean
+    hasChildren = (oProd.Products.Count > 0)
+
+    ' Write the current product row
+    AddToArray dataArray, dataCount, level, oProd.Name, "-", "-", hasChildren, ""
+
+    Dim i As Long
+    For i = 1 To oProd.Products.Count
+        Dim oChild As Object
+        Set oChild = oProd.Products.Item(i)
+
+        ' Check if the child is a Part (its ReferenceProduct.Parent is a PartDocument)
+        If Not oChild.ReferenceProduct Is Nothing Then
+            If TypeName(oChild.ReferenceProduct.Parent) = "PartDocument" Then
+                Dim oPartDoc As Object, oPart As Object
+                Set oPartDoc = oChild.ReferenceProduct.Parent
+                Set oPart = oPartDoc.Part
+
+                Dim partHasChildren As Boolean
+                partHasChildren = (oPart.Bodies.Count > 1) ' Check if part has more than one body
+
+                Dim bom As String
+                bom = "" ' Initialize BOM for this part
+
+                ' Extract properties specific to SheetMetal Design
+                If Not oPart.Parameters Is Nothing Then
+                    Dim parameters As Object
+                    Set parameters = oPart.Parameters
+
+                    Dim thickness As Double
+                    thickness = 0.0
+
+                    Dim boundingBoxWidth As Double, boundingBoxHeight As Double
+                    boundingBoxWidth = 0.0
+                    boundingBoxHeight = 0.0
+
+                    Dim isSheetMetal As Boolean
+                    isSheetMetal = False
+
+                    ' Loop through parameters using a separate loop variable
+                    Dim paramIndex As Integer
+                    For paramIndex = 1 To parameters.Count
+                        Dim currentParameter As Object
+                        Set currentParameter = parameters.Item(paramIndex)
+
+                        ' Identify the thickness parameter
+                        If InStr(1, UCase(currentParameter.Name), "THICKNESS") > 0 Then
+                            On Error Resume Next
+                            thickness = currentParameter.Value
+                            On Error GoTo 0
+                            isSheetMetal = True
+                            Exit For
+                        End If
+                    Next 
+                   
+                    ' After looping, determine the BOM if it's a SheetMetal part
+                    If isSheetMetal And thickness > 0 Then
+                        On Error Resume Next
+                        Dim unfoldFeature As Object
+                        Set unfoldFeature = oPart.SMUnfold
+                        If Not unfoldFeature Is Nothing Then
+                            boundingBoxWidth = unfoldFeature.BoundingBoxX
+                            boundingBoxHeight = unfoldFeature.BoundingBoxY
+                        Else
+                            ' Fallback to the regular bounding box
+                            boundingBoxWidth = oPart.BoundingBox.Width
+                            boundingBoxHeight = oPart.BoundingBox.Height
+                        End If
+                        On Error GoTo 0
+
+                        ' Get sheet size code
+                        Dim sheetSizeCode As String
+                        sheetSizeCode = GetSheetSizeCode(boundingBoxWidth, boundingBoxHeight)
+
+                        ' Construct BOM string
+                        If sheetSizeCode <> "OOS" Then
+                            bom = "SM" & sheetSizeCode & "T" & CStr(thickness)
+                        Else
+                            bom = "OOS"
+                        End If
+                    End If
+				Else 
+'THIS IS Where not Sheetmetal and for pipe and rod and rectangle
+				MsgBox "GetPartDesignBom Starts!!!!!!!!!!!!!!!"
+				bom = GetPartDesignBOM(oPart, GetPipeData())
+                End If
+
+                ' Write the part row on one level deeper
+                AddToArray dataArray, dataCount, level + 1, oChild.Name, "-", "-", partHasChildren, bom
+
+                ' Loop through each Body in the Part
+                Dim j As Long
+                For j = 1 To oPart.Bodies.Count
+                    Dim oBody As Object
+                    Set oBody = oPart.Bodies.Item(j)
+
+                    ' Skip if there is only one body and it is named "PartBody"
+                    If Not (oPart.Bodies.Count = 1 And oBody.Name = "PartBody") Then
+                        AddToArray dataArray, dataCount, level + 2, "-", oBody.Name, "-", False, bom
+                    End If
+                Next 
+            End If
+        End If
+
+        ' Process any subassembly recursively
+        If oChild.Products.Count > 0 Then
+            ProcessProduct oChild, level + 1, dataArray, dataCount
+        End If
+    Next 
+End Sub
+
+'===============================================================
+' AddToArray:
+' Adds a row to dataArray. It writes the Level, Product/Part Name, and Body Name.
+' Then it splits either the productName (if bodyName is "-")
+' or the bodyName (if present) by the underscore "_" and stores up to three sections.
+' If no underscore exists, placeholder "-" is used.
+'===============================================================
+Sub AddToArray(ByRef dataArray() As Variant, ByRef dataCount As Long, level As Integer, _
+               productName As String, bodyName As String, placeholder As String, hasChildren As Boolean, bom As String)
+
+    ' Increment the row counter for the data array.
+    dataCount = dataCount + 1
+    dataArray(dataCount, 0) = level
+    dataArray(dataCount, 1) = productName
+    dataArray(dataCount, 2) = bodyName
+
+    Dim nameToProcess As String
+    ' Determine the name to process based on whether `bodyName` is used.
+    If bodyName = "-" Then
+        nameToProcess = productName
+    Else
+        nameToProcess = bodyName
+    End If
+	Dim jobno as String
+    Dim result As String
+    Dim k As Integer
+    Dim parts As String ' Array declaration adjusted for CATSCRIPT compatibility.
+    Dim maxIndex As Integer
+	
+	jobno ="4063"
+    ' Replace spaces in the name (to ensure underscore-based formatting).
+    nameToProcess = Replace(nameToProcess, " ", "_")
+
+    ' Process non-"PartBody" names to add underscores and split into 3 parts.
+    If  InStr(bodyName, "SKF")=0  and InStr(productName, "NAU")=0 Then
+		If bodyName = "PartBody" then 
+			nameToProcess="PartBody" & dataArray(dataCount-1, 3)
+		End If
+
+        ' Ensure the name contains at least one underscore.
+        If InStr(nameToProcess, "_") = 0 Then
+            nameToProcess = nameToProcess & "_NA_NA"
+        End If
+
+        ' Split the name by underscores and process into a 3-part format.
+        parts = Split(CStr(nameToProcess), "_")
+        result = ""
+        maxIndex = UBound(parts)
+
+        ' Build the three-part name (padded with "NA" if necessary).
+        For k = 0 To 2
+            If k <= maxIndex Then
+                result = result & parts(k)
+            Else
+                result = result & "NA"
+            End If
+
+            ' Append underscores to all but the last part.
+            If k < 2 Then
+                result = result & "_"
+            End If
+        Next
+
+        ' Save the processed name in the data array.
+        dataArray(dataCount, 3) = result
+
+
+    Else
+        ' If "PartBody", assign a placeholder value (e.g., "-").
+        dataArray(dataCount, 3) = "-"
+    End If
+
+    ' Assign "Y" or "X" to indicate assembly/part status based on `hasChildren`.
+	If dataArray(dataCount, 3) <> "-" then
+    	If hasChildren Then
+			dataArray(dataCount, 6) = "0"	
+			dataArray(dataCount, 4) = jobno
+        	dataArray(dataCount, 5) = "Y"
+    	Else
+			dataArray(dataCount, 6) = bom
+			dataArray(dataCount, 4) = jobno
+        	dataArray(dataCount, 5) = "X"
+    	End If
+	End If
+    	
+	
+End Sub
+'===============================================================
+' CountItems:
+' Recursively counts the total number of rows required.
+' It adds:
+'   • 1 for the current product.
+'   • For a Part, 1 for the part row plus a row for each body (skipping a sole "PartBody").
+'   • For each subassembly, its count is added recursively.
+'===============================================================
+Function CountItems(oProd As Object) As Long
+    Dim total As Long
+    total = 1 ' current product
+    
+    Dim i As Long, j As Long
+    For i = 1 To oProd.Products.Count
+        Dim oChild As Object
+        Set oChild = oProd.Products.Item(i)
+        
+        If Not oChild.ReferenceProduct Is Nothing Then
+            If TypeName(oChild.ReferenceProduct.Parent) = "PartDocument" Then
+                total = total + 1 ' count the part row
+                Dim oPartDoc As Object, oPart As Object
+                Set oPartDoc = oChild.ReferenceProduct.Parent
+                Set oPart = oPartDoc.Part
+                
+                For j = 1 To oPart.Bodies.Count
+                    Dim oBody As Object
+                    Set oBody = oPart.Bodies.Item(j)
+                    If Not (oPart.Bodies.Count = 1 And oBody.Name = "PartBody") Then
+                        total = total + 1
+                    End If
+                Next
+            End If
+        End If
+        
+        If oChild.Products.Count > 0 Then
+            total = total + CountItems(oChild)
+        End If
+    Next
+    CountItems = total
+    MsgBox CountItems 
+End Function
+'===============================================================
+Function GetSheetSizeCode(width As Double, height As Double) As String
+    ' Standard sheet sizes (1000x2000, 1250x2500, 1500x3000)
+    If (width <= 1000 And height <= 2000) Or (width <= 2000 And height <= 1000) Then
+        GetSheetSizeCode = "12" ' 1000x2000
+    ElseIf (width <= 1250 And height <= 2500) Or (width <= 2500 And height <= 1250) Then
+        GetSheetSizeCode = "12525" ' 1250x2500
+    ElseIf (width <= 1500 And height <= 3000) Or (width <= 3000 And height <= 1500) Then
+        GetSheetSizeCode = "153" ' 1500x3000
+    Else
+        GetSheetSizeCode = "OOS" ' Out of Standard Size
+    End If
+End Function
+'===============================================================
+
+' Assume Rectangle is a class with Width, Height, CX, CY
+Function GetPartDesignBOM(oPart, pipeData)
+    ' --- 0. Skip if Sheet Metal (logic omitted) ---
+    MsgBox "Function GetPartDesign  Starts!"
+    Dim mainBody
+    Set mainBody = oPart.Bodies.Item(1)
+	
+	Dim Width,Height,CX,CY  as Double 
+    Dim mainSketch
+    On Error Resume Next
+    Set mainSketch = mainBody.Sketches.Item(1)
+    On Error GoTo 0
+    If mainSketch Is Nothing Then
+        GetPartDesignBOM = ""
+        Exit Function
+    End If
+
+    ' --- 1. CIRCLE DETECTION ---
+    Dim elements: Set elements = mainSketch.GeometricElements
+    Dim circleCount: circleCount = 0
+    Dim outerDiameter, innerDiameter
+    outerDiameter = 0: innerDiameter = 0
+
+    Dim i
+    For i = 0 To elements.Count - 1
+        If elements.Item(i).Type = "Circle" Then
+            circleCount = circleCount + 1
+
+    		MsgBox "Circle Found!"
+			 MsgBox circleCount 
+            If circleCount = 1 Then
+                outerDiameter = elements.Item(i).Radius * 2
+            ElseIf circleCount = 2 Then
+                innerDiameter = elements.Item(i).Radius * 2
+            End If
+        End If
+    Next
+
+    ' --- 2. CIRCLE BOM ---
+    Dim length
+    length = EstimatePartBodyLength(mainBody)
+    If circleCount = 1 Then
+        GetPartDesignBOM = "RD" & CInt(outerDiameter) & "L" & CInt(length)
+        Exit Function
+    ElseIf circleCount = 2 Then
+        Dim wallThickness
+        wallThickness = Abs((outerDiameter - innerDiameter) / 2)
+        Dim pipeSpec
+		pipeSpec = FindPipeSpec(outerDiameter, wallThickness, pipeData)
+		Dim foundPipeSpec As Boolean
+			foundPipeSpec = False
+			If IsArray(pipeSpec) Then
+				If UBound(pipeSpec) >= 3 And pipeSpec(0) <> "" Then  ' Ensure we have meaningful data
+					foundPipeSpec = True
+				End If
+			End If
+
+		If foundPipeSpec Then
+			GetPartDesignBOM = "P" & Replace(pipeSpec(0), " ", "") & "S" & pipeSpec(3)
+			Exit Function
+		Else
+			' BELT BOM fallback
+			padLength = -1
+			On Error Resume Next
+			If params.Exists("Pad.Length") Then padLength = params("Pad.Length").Value
+			On Error GoTo 0
+
+			If padLength <= 0 Then
+				For Each p In params
+					If InStr(1, p.Name, "Length", 1) > 0 Then
+						padLength = p.Value
+						Exit For
+					End If
+				Next
+			End If
+
+			If padLength > 0 And wallThickness > 0 Then
+				GetPartDesignBOM = "B" & CInt(padLength) & "T" & CInt(wallThickness)
+				Exit Function
+			End If
+		End If
+        
+    End If
+
+    ' --- 3. RECTANGLE DETECTION ---
+    Dim linesArr()
+    Dim linesCount: linesCount = 0
+
+    ' First, count the number of lines
+    For i = 0 To elements.Count - 1
+        If elements.Item(i).Type = "Line" Then
+            linesCount = linesCount + 1
+        End If
+    Next
+
+    If linesCount < 4 Then
+        GetPartDesignBOM = ""
+        Exit Function
+    End If
+
+    ' Now, fill linesArr() with the lines
+    ReDim linesArr(linesCount - 1)
+    Dim idx: idx = 0
+    For i = 0 To elements.Count - 1
+        If elements.Item(i).Type = "Line" Then
+            Set linesArr(idx) = elements.Item(i)
+            idx = idx + 1
+        End If
+    Next
+
+    ' Find up to 2 rectangles from all possible 4-line arrangements
+    ' You must predeclare Rectangle1/2 as objects (use .Width etc.)
+    Dim rectsFound(1)
+    Dim rectCnt: rectCnt = 0
+    Dim a, b, c, d
+
+    For a = 0 To linesCount - 4
+        For b = a + 1 To linesCount - 3
+            For c = b + 1 To linesCount - 2
+                For d = c + 1 To linesCount - 1
+                    If rectCnt < 2 Then
+                        Dim candidate
+                        Set candidate = CreateRectangle()
+                        If IsClosedRectByLines(linesArr(a), linesArr(b), linesArr(c), linesArr(d), candidate) Then
+                            Set rectsFound(rectCnt) = CreateRectangle()
+                            rectsFound(rectCnt).Width = candidate.Width
+                            rectsFound(rectCnt).Height = candidate.Height
+                            rectsFound(rectCnt).CX = candidate.CX
+                            rectsFound(rectCnt).CY = candidate.CY
+                            rectCnt = rectCnt + 1
+                        End If
+                    End If
+                Next
+            Next
+        Next
+    Next
+
+    ' Rectangle BOM logic (use only if found)
+    If rectCnt = 1 Then
+        With rectsFound(0)
+            If Abs(.Width - .Height) < 0.01 Then
+                GetPartDesignBOM = "SQ" & CInt(.Width)
+            Else
+                GetPartDesignBOM = "SQ" & CInt(.Width) & "L" & CInt(.Height)
+            End If
+        End With
+        Exit Function
+    ElseIf rectCnt = 2 Then
+        Dim rOut, rIn
+        If rectsFound(0).Width * rectsFound(0).Height >= rectsFound(1).Width * rectsFound(1).Height Then
+            Set rOut = rectsFound(0)
+            Set rIn = rectsFound(1)
+        Else
+            Set rOut = rectsFound(1)
+            Set rIn = rectsFound(0)
+        End If
+        If IsInsideRectangle(rOut, rIn.CX, rIn.CY) Then
+            Dim thickness
+            thickness = Round((rOut.Width - rIn.Width) / 2, 2)
+            GetPartDesignBOM = "PF" & CInt(rOut.Width) & "L" & CInt(rOut.Height) & "T" & FormatNumber(thickness, 1)
+            Exit Function
+        End If
+    End If
+
+    ' No matches
+    GetPartDesignBOM = ""
+End Function
+
+
+' ===== Detect if 4 lines form a rect (fills Rectangle) =====
+Function IsClosedRectByLines(l1 As Object, l2 As Object, l3 As Object, l4 As Object, ByRef rect As Rectangle) As Boolean
+    Const tol = 0.01
+    Dim pts(8, 2) As Double
+    Dim dict As Object
+	dict = CreateObject("Scripting.Dictionary")
+    Dim lnArr(4) As Object
+    Set lnArr(1) = l1: Set lnArr(2) = l2: Set lnArr(3) = l3: Set lnArr(4) = l4
+    Dim i As Integer
+    For i = 1 To 4
+        pts(2 * i - 1, 1) = lnArr(i).StartPoint.X
+        pts(2 * i - 1, 2) = lnArr(i).StartPoint.Y
+        pts(2 * i, 1) = lnArr(i).EndPoint.X
+        pts(2 * i, 2) = lnArr(i).EndPoint.Y
+    Next
+    ' Count unique points and ensure each used twice
+    Dim key As String
+    For i = 1 To 8
+        key = Format(pts(i, 1), "0.000") & "," & Format(pts(i, 2), "0.000")
+        dict(key) = dict(key) + 1
+    Next
+    If dict.Count <> 4 Then Exit Function
+    Dim val
+    For Each val In dict.Items
+        If val <> 2 Then Exit Function
+    Next
+    ' Compute four line lengths
+    Dim L(4) As Double
+    For i = 1 To 4
+        L(i) = Sqr((lnArr(i).EndPoint.X - lnArr(i).StartPoint.X) ^ 2 + (lnArr(i).EndPoint.Y - lnArr(i).StartPoint.Y) ^ 2)
+    Next
+    Dim w, h
+    If Abs(L(1) - L(3)) < tol And Abs(L(2) - L(4)) < tol Then
+        w = (L(1) + L(3)) / 2
+        h = (L(2) + L(4)) / 2
+    ElseIf Abs(L(1) - L(2)) < tol And Abs(L(3) - L(4)) < tol Then
+        w = (L(1) + L(2)) / 2
+        h = (L(3) + L(4)) / 2
+    Else
+        Exit Function
+    End If
+    rect.Width = Round(Application.Max(w, h), 2)
+    rect.Height = Round(Application.Min(w, h), 2)
+    Dim sumX, sumY
+    For i = 1 To 8
+        sumX = sumX + pts(i, 1): sumY = sumY + pts(i, 2)
+    Next
+    rect.CX = sumX / 8
+    rect.CY = sumY / 8
+    IsClosedRectByLines = True
+End Function
+
+' ===== Check if point is strictly inside rectangle =====
+Function IsInsideRectangle(rect As Rectangle, x As Double, y As Double) As Boolean
+    Dim halfW, halfH
+    halfW = rect.Width / 2: halfH = rect.Height / 2
+    If x > rect.CX - halfW + 0.001 And x < rect.CX + halfW - 0.001 _
+       And y > rect.CY - halfH + 0.001 And y < rect.CY + halfH - 0.001 Then
+        IsInsideRectangle = True
+    Else
+        IsInsideRectangle = False
+    End If
+End Function
+
+
+'====================================================
+Function FindPipeSpec(outerDiameter As Double, wallThickness As Double, pipeData As Variant) As Variant
+    Dim i As Integer
+    For i = LBound(pipeData) + 1 To UBound(pipeData) ' Skip header
+        If Abs(pipeData(i)(1) - outerDiameter) < 0.1 And _
+           Abs(pipeData(i)(2) - wallThickness) < 0.1 Then
+            FindPipeSpec = pipeData(i)
+            Exit Function
+        End If
+    Next
+    FindPipeSpec = Empty
+End Function
+'====================================================
+
+Function IsRectangleByLines(sketch As Object, ByRef width As Double, ByRef height As Double) As Boolean
+    Dim elements As Object
+    Set elements = sketch.GeometricElements
+
+    Dim lines As Collection
+    Set lines = New Collection
+    Dim i As Integer
+
+    ' Collect all lines from the sketch
+    For i = 1 To elements.Count
+        If elements.Item(i).Type = "Line" Then
+            lines.Add elements.Item(i)
+        End If
+    Next
+
+    ' Must have exactly 4 lines
+    If lines.Count <> 4 Then
+        IsRectangleByLines = False
+        Exit Function
+    End If
+
+    ' Store endpoints for all lines
+    Dim pts(8) As Variant
+    Dim j As Integer
+    For i = 1 To 4
+        pts(2 * i - 1) = Array(lines(i).StartPoint.X, lines(i).StartPoint.Y)
+        pts(2 * i) = Array(lines(i).EndPoint.X, lines(i).EndPoint.Y)
+    Next
+
+    ' Build a dictionary of unique points (endpoint connectivity)
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    For i = 1 To 8
+        Dim key As String
+        key = Format(pts(i)(0), "0.000") & "," & Format(pts(i)(1), "0.000")
+        If dict.Exists(key) Then
+            dict(key) = dict(key) + 1
+        Else
+            dict.Add key, 1
+        End If
+    Next
+
+    ' For a closed rectangle, should have 4 unique points, each used twice
+    If dict.Count <> 4 Then
+        IsRectangleByLines = False
+        Exit Function
+    End If
+    For Each j In dict.Keys
+        If dict(j) <> 2 Then
+            IsRectangleByLines = False
+            Exit Function
+        End If
+    Next
+
+    ' Compute lengths
+    Dim lens(4) As Double
+    For i = 1 To 4
+        lens(i) = Sqr((lines(i).EndPoint.X - lines(i).StartPoint.X) ^ 2 + _
+                      (lines(i).EndPoint.Y - lines(i).StartPoint.Y) ^ 2)
+    Next
+
+    ' Check if there are two unique lengths
+    Dim uniqLens As Object
+    Set uniqLens = CreateObject("Scripting.Dictionary")
+    For i = 1 To 4
+        Dim lkey As String
+        lkey = Format(lens(i), "0.000")
+        If Not uniqLens.Exists(lkey) Then
+            uniqLens.Add lkey, lens(i)
+        End If
+    Next
+
+    If uniqLens.Count <> 2 Then
+        IsRectangleByLines = False
+        Exit Function
+    End If
+
+    ' assign width and height
+    Dim keys As Variant
+	keys = uniqLens.Keys
+    width = uniqLens(keys(0))
+    height = uniqLens(keys(1))
+
+    IsRectangleByLines = True
+End Function
+'====================================================
+
+' Function to return the 2D array of pipe standard data
+Function GetPipeData() As Variant
+    GetPipeData = Array( _
+    Array("NPS", "OD (mm)", "Wall Thickness (mm)", "Schedule"), _
+    Array("1/8", 10.29, 0.889, "5s"), _
+    Array("1/8", 10.29, 1.245, "10s/10"), _
+    Array("1/8", 10.29, 1.448, "30"), _
+    Array("1/8", 10.29, 1.727, "40s/40/STD"), _
+    Array("1/8", 10.29, 2.413, "80s/80/XS"), _
+    Array("1/4", 13.72, 1.245, "5s"), _
+    Array("1/4", 13.72, 1.651, "10s/10"), _
+    Array("1/4", 13.72, 1.854, "30"), _
+    Array("1/4", 13.72, 2.235, "40s/40/STD"), _
+    Array("1/4", 13.72, 3.023, "80s/80/XS"), _
+    Array("3/8", 17.15, 1.245, "5s"), _
+    Array("3/8", 17.15, 1.651, "10s/10"), _
+    Array("3/8", 17.15, 1.854, "30"), _
+    Array("3/8", 17.15, 2.311, "40s/40/STD"), _
+    Array("3/8", 17.15, 3.200, "80s/80/XS"), _
+    Array("1/2", 21.34, 1.651, "5s"), _
+    Array("1/2", 21.34, 2.108, "10s/10"), _
+    Array("1/2", 21.34, 2.413, "30"), _
+    Array("1/2", 21.34, 2.769, "40s/40/STD"), _
+    Array("1/2", 21.34, 3.734, "80s/80/XS"), _
+    Array("1/2", 21.34, 4.775, "160"), _
+    Array("1/2", 21.34, 7.468, "XXS"), _
+    Array("3/4", 26.67, 1.651, "5s"), _
+    Array("3/4", 26.67, 2.108, "10s/10"), _
+    Array("3/4", 26.67, 2.413, "30"), _
+    Array("3/4", 26.67, 2.870, "40s/40/STD"), _
+    Array("3/4", 26.67, 3.912, "80s/80/XS"), _
+    Array("3/4", 26.67, 5.563, "160"), _
+    Array("3/4", 26.67, 7.823, "XXS"), _
+    Array("1", 33.40, 1.651, "5s"), _
+    Array("1", 33.40, 2.769, "10s/10"), _
+    Array("1", 33.40, 2.896, "30"), _
+    Array("1", 33.40, 3.378, "40s/40/STD"), _
+    Array("1", 33.40, 4.547, "80s/80/XS"), _
+    Array("1", 33.40, 6.350, "160"), _
+    Array("1", 33.40, 9.093, "XXS"), _
+    Array("1 1/4", 42.16, 1.651, "5s"), _
+    Array("1 1/4", 42.16, 2.769, "10s/10"), _
+    Array("1 1/4", 42.16, 2.972, "30"), _
+    Array("1 1/4", 42.16, 3.556, "40s/40/STD"), _
+    Array("1 1/4", 42.16, 4.851, "80s/80/XS"), _
+    Array("1 1/4", 42.16, 6.350, "160"), _
+    Array("1 1/4", 42.16, 9.703, "XXS"), _
+    Array("1 1/2", 48.26, 1.651, "5s"), _
+    Array("1 1/2", 48.26, 2.769, "10s/10"), _
+    Array("1 1/2", 48.26, 3.175, "30"), _
+    Array("1 1/2", 48.26, 3.683, "40s/40/STD"), _
+    Array("1 1/2", 48.26, 5.080, "80s/80/XS"), _
+    Array("1 1/2", 48.26, 7.137, "160"), _
+    Array("1 1/2", 48.26, 10.160, "XXS"), _
+    Array("2", 60.33, 1.651, "5s"), _
+    Array("2", 60.33, 2.769, "10s/10"), _
+    Array("2", 60.33, 3.175, "30"), _
+    Array("2", 60.33, 3.912, "40s/40/STD"), _
+    Array("2", 60.33, 5.537, "80s/80/XS"), _
+    Array("2", 60.33, 8.738, "160"), _
+    Array("2", 60.33, 11.074, "XXS"), _
+    Array("2 1/2", 73.03, 2.108, "5s"), _
+    Array("2 1/2", 73.03, 3.048, "10s/10"), _
+    Array("2 1/2", 73.03, 4.775, "30"), _
+    Array("2 1/2", 73.03, 5.156, "40s/40/STD"), _
+    Array("2 1/2", 73.03, 7.010, "80s/80/XS"), _
+    Array("2 1/2", 73.03, 7.620, "120"), _
+    Array("2 1/2", 73.03, 9.525, "160"), _
+    Array("2 1/2", 73.03, 14.021, "XXS"), _
+    Array("3", 88.90, 2.108, "5s"), _
+    Array("3", 88.90, 3.048, "10s/10"), _
+    Array("3", 88.90, 4.775, "30"), _
+    Array("3", 88.90, 5.486, "40s/40/STD"), _
+    Array("3", 88.90, 7.620, "80s/80/XS"), _
+    Array("3", 88.90, 8.890, "120"), _
+    Array("3", 88.90, 11.125, "160"), _
+    Array("3", 88.90, 15.240, "XXS"), _
+    Array("3 1/2", 101.60, 2.108, "5s"), _
+    Array("3 1/2", 101.60, 3.048, "10s/10"), _
+    Array("3 1/2", 101.60, 4.775, "30"), _
+    Array("3 1/2", 101.60, 5.740, "40s/40/STD"), _
+    Array("3 1/2", 101.60, 8.077, "80s/80/XS"), _
+    Array("3 1/2", 101.60, 16.154, "XXS"), _
+    Array("4", 114.30, 2.108, "5s"), _
+    Array("4", 114.30, 3.048, "10s/10"), _
+    Array("4", 114.30, 4.775, "30"), _
+    Array("4", 114.30, 6.020, "40s/40/STD"), _
+    Array("4", 114.30, 8.560, "80s/80/XS"), _
+    Array("4", 114.30, 11.100, "120"), _
+    Array("4", 114.30, 13.487, "160"), _
+    Array("4", 114.30, 17.120, "XXS"), _
+    Array("4 1/2", 127.00, 6.274, "40s/40/STD"), _
+    Array("4 1/2", 127.00, 9.017, "80s/80/XS"), _
+    Array("4 1/2", 127.00, 18.034, "XXS"), _
+    Array("5", 141.30, 2.769, "5s"), _
+    Array("5", 141.30, 3.404, "10s/10"), _
+    Array("5", 141.30, 6.553, "40s/40/STD"), _
+    Array("5", 141.30, 9.525, "80s/80/XS"), _
+    Array("5", 141.30, 12.700, "120"), _
+    Array("5", 141.30, 15.875, "160"), _
+    Array("5", 141.30, 19.050, "XXS"), _
+    Array("6", 168.28, 2.769, "5s"), _
+    Array("6", 168.28, 3.404, "10s/10"), _
+    Array("6", 168.28, 7.112, "40s/40/STD"), _
+    Array("6", 168.28, 10.973, "80s/80/XS"), _
+    Array("6", 168.28, 14.275, "120"), _
+    Array("6", 168.28, 18.263, "160"), _
+    Array("6", 168.28, 21.946, "XXS"), _
+    Array("7", 193.68, 7.645, "40s/40/STD"), _
+    Array("7", 193.68, 12.700, "80s/80/XS"), _
+    Array("7", 193.68, 22.225, "XXS"), _
+    Array("8", 219.08, 2.769, "5s"), _
+    Array("8", 219.08, 3.759, "10s/10"), _
+    Array("8", 219.08, 6.350, "20"), _
+    Array("8", 219.08, 7.036, "30"), _
+    Array("8", 219.08, 8.179, "40s/40/STD"), _
+    Array("8", 219.08, 10.312, "60"), _
+    Array("8", 219.08, 12.700, "80s/80/XS"), _
+    Array("8", 219.08, 15.062, "100"), _
+    Array("8", 219.08, 18.263, "120"), _
+    Array("8", 219.08, 20.625, "140"), _
+    Array("8", 219.08, 23.012, "160"), _
+    Array("8", 219.08, 22.225, "XXS"), _
+    Array("9", 244.48, 8.687, "40s/40/STD"), _
+    Array("9", 244.48, 12.700, "80s/80/XS"), _
+    Array("10", 273.05, 3.404, "5s"), _
+    Array("10", 273.05, 4.191, "10"), _
+    Array("10", 273.05, 4.191, "10s"), _
+    Array("10", 273.05, 6.350, "20"), _
+    Array("10", 273.05, 7.798, "30"), _
+    Array("10", 273.05, 9.271, "Std./40S"), _
+    Array("10", 273.05, 9.271, "40"), _
+    Array("10", 273.05, 12.700, "60"), _
+    Array("10", 273.05, 12.700, "80s/XS"), _
+    Array("10", 273.05, 15.088, "80"), _
+    Array("10", 273.05, 18.237, "100"), _
+    Array("10", 273.05, 21.412, "120"), _
+    Array("10", 273.05, 25.400, "140"), _
+    Array("10", 273.05, 28.575, "160"), _
+    Array("12", 323.85, 3.962, "5s"), _
+    Array("12", 323.85, 4.572, "10"), _
+    Array("12", 323.85, 4.572, "10s"), _
+    Array("12", 323.85, 6.350, "20"), _
+    Array("12", 323.85, 8.382, "30"), _
+    Array("12", 323.85, 9.525, "Std./40S"), _
+    Array("12", 323.85, 10.312, "40"), _
+    Array("12", 323.85, 14.275, "60"), _
+    Array("12", 323.85, 12.700, "80s/XS"), _
+    Array("12", 323.85, 17.450, "80"), _
+    Array("12", 323.85, 21.412, "100"), _
+    Array("12", 323.85, 25.400, "120"), _
+    Array("12", 323.85, 28.575, "140"), _
+    Array("12", 323.85, 33.325, "160"), _
+    Array("14", 355.60, 3.962, "5s"), _
+    Array("14", 355.60, 6.350, "10"), _
+    Array("14", 355.60, 4.775, "20"), _
+    Array("14", 355.60, 7.925, "30"), _
+    Array("14", 355.60, 9.525, "Std./40S"), _
+    Array("14", 355.60, 11.100, "40"), _
+    Array("14", 355.60, 15.062, "60"), _
+    Array("14", 355.60, 12.700, "80s/XS"), _
+    Array("14", 355.60, 19.050, "80"), _
+    Array("14", 355.60, 23.800, "100"), _
+    Array("14", 355.60, 27.762, "120"), _
+    Array("14", 355.60, 31.750, "140"), _
+    Array("14", 355.60, 35.712, "160"), _
+    Array("16", 406.40, 4.191, "5s"), _
+    Array("16", 406.40, 6.350, "10"), _
+    Array("16", 406.40, 4.775, "20"), _
+    Array("16", 406.40, 7.925, "30"), _
+    Array("16", 406.40, 9.525, "Std./40S"), _
+    Array("16", 406.40, 12.700, "40"), _
+    Array("16", 406.40, 16.662, "60"), _
+    Array("16", 406.40, 12.700, "80s/XS"), _
+    Array("16", 406.40, 21.412, "80"), _
+    Array("16", 406.40, 26.187, "100"), _
+    Array("16", 406.40, 30.937, "120"), _
+    Array("16", 406.40, 36.500, "140"), _
+    Array("16", 406.40, 40.488, "160"), _
+    Array("18", 457.20, 4.191, "5s"), _
+    Array("18", 457.20, 6.350, "10"), _
+    Array("18", 457.20, 4.775, "20"), _
+    Array("18", 457.20, 7.925, "30"), _
+    Array("18", 457.20, 11.100, "Std./40S"), _
+    Array("18", 457.20, 14.275, "40"), _
+    Array("18", 457.20, 19.050, "60"), _
+    Array("18", 457.20, 12.700, "80s/XS"), _
+    Array("18", 457.20, 23.800, "80"), _
+    Array("18", 457.20, 29.362, "100"), _
+    Array("18", 457.20, 34.925, "120"), _
+    Array("18", 457.20, 39.675, "140"), _
+    Array("18", 457.20, 45.237, "160"), _
+    Array("20", 508.00, 4.775, "5s"), _
+    Array("20", 508.00, 6.350, "10"), _
+    Array("20", 508.00, 5.537, "20"), _
+    Array("20", 508.00, 9.525, "30"), _
+    Array("20", 508.00, 12.700, "Std./40S"), _
+    Array("20", 508.00, 15.062, "40"), _
+    Array("20", 508.00, 20.625, "60"), _
+    Array("20", 508.00, 12.700, "80s/XS"), _
+    Array("20", 508.00, 26.187, "80"), _
+    Array("20", 508.00, 32.512, "100"), _
+    Array("20", 508.00, 38.100, "120"), _
+    Array("20", 508.00, 44.450, "140"), _
+    Array("20", 508.00, 49.987, "160"), _
+    Array("22", 558.80, 4.775, "5s"), _
+    Array("22", 558.80, 6.350, "10"), _
+    Array("22", 558.80, 5.537, "20"), _
+    Array("22", 558.80, 9.525, "30"), _
+    Array("22", 558.80, 12.700, "Std./40S"), _
+    Array("22", 558.80, 22.225, "60"), _
+    Array("22", 558.80, 12.700, "80s/XS"), _
+    Array("22", 558.80, 28.575, "80"), _
+    Array("22", 558.80, 34.925, "100"), _
+    Array("22", 558.80, 41.275, "120"), _
+    Array("22", 558.80, 47.625, "140"), _
+    Array("22", 558.80, 53.975, "160"), _
+    Array("24", 609.60, 5.537, "5s"), _
+    Array("24", 609.60, 6.350, "10"), _
+    Array("24", 609.60, 6.350, "20"), _
+    Array("24", 609.60, 9.525, "30"), _
+    Array("24", 609.60, 14.275, "Std./40S"), _
+    Array("24", 609.60, 17.450, "40"), _
+    Array("24", 609.60, 24.587, "60"), _
+    Array("24", 609.60, 12.700, "80s/XS"), _
+    Array("24", 609.60, 30.937, "80"), _
+    Array("24", 609.60, 38.887, "100"), _
+    Array("24", 609.60, 46.025, "120"), _
+    Array("24", 609.60, 52.375, "140"), _
+    Array("24", 609.60, 59.512, "160"), _
+    Array("40", 1016.000, 9.525, "Std. Wt."), _
+    Array("40", 1016.000, 12.700, "Sch. XS"), _
+    Array("40", 1016.000, 25.400, "Sch. XXS"), _
+    Array("42", 1066.800, 9.525, "Std. Wt."), _
+    Array("42", 1066.800, 12.700, "Sch. XS"), _
+    Array("42", 1066.800, 25.400, "Sch. XXS"), _
+    Array("44", 1117.600, 9.525, "Std. Wt."), _
+    Array("44", 1117.600, 12.700, "Sch. XS"), _
+    Array("44", 1117.600, 25.400, "Sch. XXS"), _
+    Array("46", 1168.400, 9.525, "Std. Wt."), _
+    Array("46", 1168.400, 12.700, "Sch. XS"), _
+    Array("46", 1168.400, 25.400, "Sch. XXS"), _
+    Array("48", 1219.200, 9.525, "Std. Wt."), _
+    Array("48", 1219.200, 12.700, "Sch. XS"), _
+    Array("48", 1219.200, 25.400, "Sch. XXS"), _
+    Array("52", 1320.800, 9.525, "Std. Wt."),_
+	Array("DIN11850 Series 1", "OD (mm)", "Wall Thickness (mm)"), _
+	Array("DN10", 12, 1.5), _
+	Array("DN15", 18, 1.5), _
+	Array("DN20", 22, 1.5), _
+	Array("DN25", 28, 1.5), _
+	Array("DN32", 34, 1.5), _
+	Array("DN40", 40, 1.5), _
+	Array("DN50", 52, 1.5), _
+	Array("DIN65", 70, 2.0), _ 	
+	Array("DN80", 85, 2.0), _
+	Array("DN100", 104, 2.0), _
+	Array("DN125", 129, 2.0), _
+	Array("DN150", 154, 2.0), _
+	Array("DN200", 204, 2.0), _
+	Array("DN250", 254, 2.0), _
+	Array("DN300", 304, 2.0), _
+	Array("DIN11850 Series 2", "OD (mm)", "Wall Thickness (mm)"), _
+	Array("DN10", 13, 1.5), _ 
+	Array("DN15", 19, 1.5), _
+	Array("DN20", 23, 1.5), _ 
+	Array("DN25", 29, 1.5), _ 
+	Array("DN32", 35, 1.5), _ 
+	Array("DN40", 41, 1.5), _ 
+	Array("DN50", 53, 1.5), _ 
+	Array("DIN65", 70, 2.0), _
+	Array("DN80", 85, 2.0), _  
+	Array("DN100", 104, 2.0), _  
+	Array("DN125", 129, 2.0), _  
+	Array("DN150", 154, 2.0), _  
+	Array("DN200", 204, 2.0), _  
+	Array("DIN250", 254, 2.0), _  
+	Array("DIN300", 304, 2.0), _  
+	 Array("", "", ""), _  
+	Array("DIN11850 Series 3", "OD (mm)", "Wall Thickness (mm)"), _
+	Array("DN10", 14, 2.0), _
+	Array("DN15", 20, 2.0), _
+	Array("DN20", 24, 2.0), _
+	Array("DN25", 30, 2.0), _
+	Array("DN32", 36, 2.0), _
+	Array("DN40", 42, 2.0), _
+	Array("DN50", 54, 2.0) _
+		)
+End Function
+'====================================================

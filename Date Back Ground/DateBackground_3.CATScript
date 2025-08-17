@@ -1,0 +1,53 @@
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc
+    Dim oDrawingSheet
+    Dim oBackgroundView
+    Dim oTextObject
+    Dim currentDate
+    Dim dayStr, monthStr, yearStr
+
+    ' Get the current date formatted as DD-MMM-YYYY
+    dayStr = Day(Date)
+    monthStr = MonthName(Month(Date), True)
+    yearStr = Year(Date)
+    currentDate = dayStr & "-" & monthStr & "-" & yearStr
+
+    ' Error handling
+    On Error Resume Next
+
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+    If Err.Number <> 0 Or oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the active sheet
+    Set oDrawingSheet = oDrawingDoc.Sheets.ActiveSheet
+    If Err.Number <> 0 Then
+        MsgBox "No active drawing sheet found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Switch to the background view of the sheet
+    Set oBackgroundView = oDrawingSheet.Views.Item("Background View")
+    If oBackgroundView Is Nothing Then
+        MsgBox "Background view not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Access the "Text54" object
+    On Error Resume Next
+    Set oTextObject = oBackgroundView.Texts.Item("Text 54")
+    If oTextObject Is Nothing Then
+        MsgBox "Text 54 object not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Update the text of "Text54" object with the current date
+    oTextObject.Text = currentDate
+
+    ' Confirm completion
+    MsgBox "Current date inserted into Text54 in the background.", vbInformation
+End Sub

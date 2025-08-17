@@ -1,0 +1,40 @@
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc
+    Dim oDrawingSheet
+    Dim oBackgroundView
+    Dim oTexts
+    Dim i
+    Dim textObject
+
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+    If oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the active sheet
+    Set oDrawingSheet = oDrawingDoc.Sheets.ActiveSheet
+    If oDrawingSheet Is Nothing Then
+        MsgBox "No active drawing sheet found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Switch to the background view
+    Set oBackgroundView = oDrawingSheet.Views.Item("Background View")
+    If oBackgroundView Is Nothing Then
+        MsgBox "Background view not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the collection of text objects in the background view
+    Set oTexts = oBackgroundView.Texts
+
+    ' List all text objects
+    For i = 1 To oTexts.Count
+        Set textObject = oTexts.Item(i)
+        MsgBox "Text object " & i & ": " & textObject.Text
+    Next 
+End Sub
+

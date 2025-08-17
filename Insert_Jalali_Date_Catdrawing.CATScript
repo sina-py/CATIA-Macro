@@ -1,0 +1,132 @@
+Function ConvertToJalali(ByVal gYear As Integer, ByVal gMonth As Integer, ByVal gDay As Integer)
+    ' Declare variables for Jalali date components
+    Dim jYear As Integer, jMonth As Integer, jDay As Integer
+    Dim g_days_in_month As Variant
+    Dim j_days_in_month As Variant
+    Dim gy As Long, gm As Long, gd As Long
+    Dim jy As Long, jm As Long, jd As Long
+    Dim g_day_no As Long, j_day_no As Long
+    Dim j_np As Long
+    
+    ' Initialize arrays for days in months
+    g_days_in_month = Array(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    j_days_in_month = Array(31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29)
+    
+    gy = gYear - 1600
+    gm = gMonth - 1
+    gd = gDay - 1
+    
+    g_day_no = 365 * gy + Int((gy + 3) / 4) - Int((gy + 99) / 100) + Int((gy + 399) / 400)
+    
+    For i = 0 To gm - 1
+        g_day_no = g_day_no + g_days_in_month(i)
+    Next
+    
+    If gm > 1 And ((gy Mod 4 = 0 And gy Mod 100 <> 0) Or (gy Mod 400 = 0)) Then
+        g_day_no = g_day_no + 1
+    End If
+    
+    g_day_no = g_day_no + gd
+    j_day_no = g_day_no - 79
+    j_np = Int(j_day_no / 12053)
+    j_day_no = j_day_no Mod 12053
+    
+    jy = 979 + 33 * j_np + 4 * Int(j_day_no / 1461)
+    j_day_no = j_day_no Mod 1461
+    
+    If j_day_no >= 366 Then
+        jy = jy + Int((j_day_no - 1) / 365)
+        j_day_no = (j_day_no - 1) Mod 365
+    End If
+    
+    For i = 0 To 11
+        If j_day_no < j_days_in_month(i) Then
+            jm = i + 1
+            jd = j_day_no + 1
+            Exit For
+        End If
+        j_day_no = j_day_no - j_days_in_month(i)
+    Next
+    
+    ConvertToJalali = Array(jy, jm, jd)
+End Function
+
+Function GetJalaliMonthName(ByVal monthNumber As Integer) As String
+    Dim monthNames As Variant
+    monthNames = Array("Farvardin", "Ordibehesht", "Khordad", "Tir", "Mordad", "Shahrivar", _
+                      "Mehr", "Aban", "Azar", "Dey", "Bahman", "Esfand")
+    
+    If monthNumber >= 1 And monthNumber <= 12 Then
+        GetJalaliMonthName = monthNames(monthNumber - 1)
+    Else
+        GetJalaliMonthName = "Invalid Month"
+    End If
+End Function
+
+Sub CATMain()
+    ' Declare variables
+    Dim oDrawingDoc As DrawingDocument
+    Dim oDrawingSheet As DrawingSheet
+    Dim oBackgroundView As DrawingView
+    Dim oText As DrawingText
+    Dim currentDate As String
+    Dim dayStr As String
+    Dim monthStr As String
+    Dim yearStr As String
+    
+    ' Get current Gregorian date components
+    dayStr = Day(Date)
+    If Len(dayStr) = 1 Then dayStr = "0" & dayStr
+    monthStr = MonthName(Month(Date), True)
+    yearStr = Year(Date)
+    
+    ' Convert to Jalali
+    Dim jalaliDate As Variant
+    jalaliDate = ConvertToJalali(Year(Date), Month(Date), Day(Date))
+    
+    ' Format Jalali date
+    Dim jalaliDayStr As String
+    jalaliDayStr = jalaliDate(2)
+    If Len(jalaliDayStr) = 1 Then jalaliDayStr = "0" & jalaliDayStr
+    
+    ' Create the combined date string (Gregorian & Jalali)
+    currentDate = dayStr & "-" & monthStr & "-" & yearStr & " / " & _
+                 jalaliDayStr & "-" & GetJalaliMonthName(jalaliDate(1)) & "-" & jalaliDate(0)
+
+    ' Error handling
+    On Error Resume Next
+
+    ' Get the active document
+    Set oDrawingDoc = CATIA.ActiveDocument
+    If Err.Number <> 0 Or oDrawingDoc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get the active sheet
+    Set oDrawingSheet = oDrawingDoc.Sheets.ActiveSheet
+    If Err.Number <> 0 Then
+        MsgBox "No active drawing sheet found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Switch to the background view of the sheet
+    Set oBackgroundView = oDrawingSheet.Views.Item("Background View")
+    If oBackgroundView Is Nothing Then
+        MsgBox "Background view not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Access the text object in the background view
+    Set oText = oBackgroundView.Texts.Item("1")
+    If oText Is Nothing Then
+        MsgBox "Text object not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Insert the combined date into the text object
+    oText.Text = currentDate
+
+    ' Confirm completion
+    MsgBox "Current date (Gregorian/Jalali) inserted into the text object.", vbInformation
+End Sub
