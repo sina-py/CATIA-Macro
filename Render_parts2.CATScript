@@ -1,0 +1,147 @@
+' ============================================================
+' CATIA V5 R21 CATScript
+' Render Isometric View of every Body, Part, and Product
+' Saves PNG with name = object's name
+' Hides everything before showing the target for clean snapshots
+' ============================================================
+
+Sub CATMain()
+
+    Dim CATIA As Application
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    If CATIA Is Nothing Then
+        MsgBox "No running CATIA instance found.", vbCritical
+        Exit Sub
+    End If
+
+    Dim doc As Object
+    Set doc = CATIA.ActiveDocument
+
+    If doc Is Nothing Then
+        MsgBox "No active document.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim ext, savePath
+    ext = ".png"
+    savePath = "D:\Design\CATIA_Excel_Import\"   ' <-- CHANGE this folder
+    If Right(savePath, 1) <> "\" Then savePath = savePath & "\"
+
+    ' Ensure shaded mode
+    CATIA.ActiveWindow.ActiveViewer.RenderingMode = 1
+
+    Select Case TypeName(doc)
+        Case "PartDocument"
+            CapturePart doc, savePath, ext
+        Case "ProductDocument"
+            CaptureProduct doc.Product, savePath, ext
+        Case Else
+            MsgBox "Not a Part or Product document: " & TypeName(doc), vbExclamation
+    End Select
+
+    MsgBox "Render export completed.", vbInformation
+
+End Sub
+
+' ------------------- Capture Part -------------------
+Sub CapturePart(partDoc, savePath, ext)
+
+    Dim partName
+    partName = partDoc.Part.Name
+    HideAll partDoc
+    ShowObject partDoc.Part
+    SaveIsoView partName, savePath, ext
+ If TypeName(partDoc) = "PartDocument" Or TypeName(partDoc) = "ProductDocument" Then
+    ShowAll partDoc
+End If
+  
+
+
+    Dim body
+    For Each body In partDoc.Part.Bodies
+        HideAll partDoc
+        ShowObject body
+        SaveIsoView body.Name, savePath, ext
+If TypeName(partDoc) = "PartDocument" Or TypeName(partDoc) = "ProductDocument" Then
+    ShowAll partDoc
+End If
+    Next
+
+End Sub
+
+' ------------------- Capture Product -------------------
+Sub CaptureProduct(prod, savePath, ext)
+
+    ' Capture whole product
+    Dim rootDoc
+    Set rootDoc = prod.Parent.Parent
+    HideAll rootDoc
+    ShowObject prod
+    SaveIsoView prod.PartNumber, savePath, ext
+    ShowAll rootDoc
+
+    ' Loop children
+    Dim child
+    For Each child In prod.Products
+        Dim childDoc
+        Set childDoc = child.ReferenceProduct.Parent.Parent
+        If TypeName(childDoc) = "PartDocument" Then
+            CapturePart childDoc, savePath, ext
+        ElseIf TypeName(childDoc) = "ProductDocument" Then
+            CaptureProduct child, savePath, ext
+        End If
+    Next
+
+End Sub
+
+' ------------------- Visibility helpers -------------------
+Sub HideAll(doc)
+    Dim sel
+    Set sel = doc.Selection
+    sel.Clear
+    sel.Search "Name=*"
+    sel.VisProperties.SetShow 1  ' Hide all
+End Sub
+
+Sub ShowBranch(doc, branchPath)
+    Dim sel
+    Set sel = doc.Selection
+    sel.Clear
+    ' Show the top object
+    sel.Search "Name='" & branchPath & "'"
+    sel.VisProperties.SetShow 0
+    ' Show all children (parts, products, bodies under the branch)
+    sel.Search "Name=* "
+    sel.VisProperties.SetShow 0
+End Sub
+
+Sub ShowObject(obj)
+    Dim doc
+    Set doc = CATIA.ActiveDocument
+    Dim sel
+    Set sel = doc.Selection
+    sel.Clear
+    sel.Add obj
+    sel.VisProperties.SetShow 1
+End Sub
+
+' ------------------- Save Isometric View -------------------
+Sub SaveIsoView(baseName, savePath, ext)
+
+    CATIA.StartCommand "Isometric View"
+    CATIA.ActiveWindow.ActiveViewer.Reframe
+    CATIA.ActiveWindow.ActiveViewer.CaptureToFile 2, _
+        savePath & CleanFileName(baseName) & ext   ' 2 = PNG
+
+End Sub
+
+' ------------------- Clean File Name -------------------
+Function CleanFileName(name)
+    Dim invalidChars, i
+    invalidChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+    CleanFileName = name
+    For i = 0 To UBound(invalidChars)
+        CleanFileName = Replace(CleanFileName, invalidChars(i), "_")
+    Next
+End Function

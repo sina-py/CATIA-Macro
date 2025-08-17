@@ -1,0 +1,154 @@
+' CATSCRIPT to detect RODS and PIPES
+' - ROD = one circle in sketch (solid cylinder)
+' - PIPE = two circles (hollow cylinder)
+' Displays relevant sizes & lengths
+
+Sub CATMain()
+    If CATIA.Documents.Count = 0 Then
+        MsgBox "Please open a CATPart or CATProduct document first."
+        Exit Sub
+    End If
+    
+    Dim oDoc
+    Set oDoc = CATIA.ActiveDocument
+    
+    Dim sRodResults, sPipeResults
+    sRodResults = "ROD BILL OF MATERIAL" & vbCrLf & "===================" & vbCrLf & vbCrLf
+    sPipeResults = "PIPE BILL OF MATERIAL" & vbCrLf & "====================" & vbCrLf & vbCrLf
+    
+    If TypeName(oDoc) = "PartDocument" Then
+        ProcessPart oDoc.Part, sRodResults, sPipeResults
+    ElseIf TypeName(oDoc) = "ProductDocument" Then
+        ProcessProduct oDoc.Product, sRodResults, sPipeResults
+    Else
+        MsgBox "This script works only with CATPart or CATProduct documents."
+        Exit Sub
+    End If
+    
+    If sRodResults = "ROD BILL OF MATERIAL" & vbCrLf & "===================" & vbCrLf & vbCrLf _
+       And sPipeResults = "PIPE BILL OF MATERIAL" & vbCrLf & "====================" & vbCrLf & vbCrLf Then
+        MsgBox "No rods or pipes found."
+    Else
+        MsgBox sRodResults & vbCrLf & vbCrLf & sPipeResults
+    End If
+End Sub
+
+Sub ProcessProduct(oProduct, ByRef sRodResults, ByRef sPipeResults)
+    Dim i
+    For i = 1 To oProduct.Products.Count
+        Dim oSubProduct
+        Set oSubProduct = oProduct.Products.Item(i)
+        
+        If oSubProduct.ReferenceProduct.Parent.Name Like "*.CATPart" Then
+            On Error Resume Next
+            Dim oPart
+            Set oPart = oSubProduct.ReferenceProduct.Parent.Part
+            If Err.Number = 0 Then
+                ProcessPart oPart, sRodResults, sPipeResults
+            End If
+            On Error GoTo 0
+        ElseIf oSubProduct.Products.Count > 0 Then
+            ProcessProduct oSubProduct, sRodResults, sPipeResults
+        End If
+    Next
+End Sub
+
+Sub ProcessPart(oPart, ByRef sRodResults, ByRef sPipeResults)
+    Dim i
+    For i = 1 To oPart.Bodies.Count
+        ProcessBody oPart.Bodies.Item(i), sRodResults, sPipeResults
+    Next
+End Sub
+
+Sub ProcessBody(oBody, ByRef sRodResults, ByRef sPipeResults)
+    Dim i
+    For i = 1 To oBody.Shapes.Count
+        If TypeName(oBody.Shapes.Item(i)) = "Pad" Then
+            Dim oPad, oSketch
+            Set oPad = oBody.Shapes.Item(i)
+            
+            On Error Resume Next
+            Set oSketch = oPad.Sketch
+            If Err.Number <> 0 Then
+                On Error GoTo 0
+                Exit Sub
+            End If
+            On Error GoTo 0
+            
+            Dim dOuterDiameter, dInnerDiameter, dLength
+            Dim bIsRod, bIsPipe
+            dOuterDiameter = 0
+            dInnerDiameter = 0
+            bIsRod = False
+            bIsPipe = False
+            
+            Dim arrDiameters
+            arrDiameters = Array() ' Start empty
+            
+            Dim oConstraints, oConstraint, k
+            Set oConstraints = oSketch.Constraints
+            
+            For k = 1 To oConstraints.Count
+                Set oConstraint = oConstraints.Item(k)
+                If oConstraint.Type = catCstTypeRadius Then
+                    Call AppendToArray(arrDiameters, CDbl(oConstraint.Dimension.Value * 2))
+                End If
+            Next
+            
+            If UBound(arrDiameters) = 0 Then
+                bIsRod = True
+                dOuterDiameter = arrDiameters(0)
+            ElseIf UBound(arrDiameters) = 1 Then
+                bIsPipe = True
+                If arrDiameters(0) > arrDiameters(1) Then
+                    dOuterDiameter = arrDiameters(0)
+                    dInnerDiameter = arrDiameters(1)
+                Else
+                    dOuterDiameter = arrDiameters(1)
+                    dInnerDiameter = arrDiameters(0)
+                End If
+            End If
+            
+            ' Length
+            On Error Resume Next
+            dLength = oPad.FirstLimit.Dimension.Value
+            If Err.Number <> 0 Then
+                Err.Clear
+                dLength = oPad.SecondLimit.Dimension.Value
+            End If
+            On Error GoTo 0
+            
+            If bIsRod Then
+                sRodResults = sRodResults & "Body: " & oBody.Name & vbCrLf & _
+                    "  Diameter: " & RoundNum(dOuterDiameter, 2) & " mm" & vbCrLf & _
+                    "  Length: " & RoundNum(dLength, 2) & " mm" & vbCrLf & vbCrLf
+            ElseIf bIsPipe Then
+                Dim dThickness
+                dThickness = (dOuterDiameter - dInnerDiameter) / 2
+                sPipeResults = sPipeResults & "Body: " & oBody.Name & vbCrLf & _
+                    "  Outer Dia: " & RoundNum(dOuterDiameter, 2) & " mm" & vbCrLf & _
+                    "  Inner Dia: " & RoundNum(dInnerDiameter, 2) & " mm" & vbCrLf & _
+                    "  Wall Thk: " & RoundNum(dThickness, 2) & " mm" & vbCrLf & _
+                    "  Length: " & RoundNum(dLength, 2) & " mm" & vbCrLf & vbCrLf
+            End If
+        End If
+    Next
+End Sub
+
+' Append element to a dynamic VBScript array
+Sub AppendToArray(ByRef arr, ByVal value)
+    Dim newSize
+    If IsEmpty(arr) Then
+        arr = Array(value)
+    Else
+        newSize = UBound(arr) + 1
+        ReDim Preserve arr(newSize)
+        arr(newSize) = value
+    End If
+End Sub
+
+Function RoundNum(val, decimals)
+    Dim mult
+    mult = 10 ^ decimals
+    RoundNum = Int(val * mult + 0.5) / mult
+End Function

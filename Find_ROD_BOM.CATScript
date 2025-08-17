@@ -1,0 +1,160 @@
+
+
+Sub CATMain()
+    ' Check if a document is open
+    If CATIA.Documents.Count = 0 Then
+        MsgBox "Please open a CATPart or CATProduct document first."
+        Exit Sub
+    End If
+    
+    ' Get active document
+    Dim oDoc As Document
+    Set oDoc = CATIA.ActiveDocument
+    
+    ' Initialize result string
+    Dim sResults As String
+    sResults = "ROD BILL OF MATERIAL" & vbCrLf & "===================" & vbCrLf & vbCrLf
+    
+    ' Process based on document type
+    If TypeName(oDoc) = "PartDocument" Then
+        ' Process single part
+        ProcessPart oDoc.Part, sResults
+    ElseIf TypeName(oDoc) = "ProductDocument" Then
+        ' Process product (assembly)
+        ProcessProduct oDoc.Product, sResults
+    Else
+        MsgBox "This script works only with CATPart or CATProduct documents."
+        Exit Sub
+    End If
+    
+    ' Display results
+    If sResults = "ROD BILL OF MATERIAL" & vbCrLf & "===================" & vbCrLf & vbCrLf Then
+        MsgBox "No circular rods found in the document."
+    Else
+        MsgBox sResults
+    End If
+End Sub
+
+' Process a product (assembly) recursively
+Sub ProcessProduct(oProduct As Product, ByRef sResults As String)
+    Dim i As Integer
+    
+    ' Loop through all children
+    For i = 1 To oProduct.Products.Count
+        Dim oSubProduct As Product
+        Set oSubProduct = oProduct.Products.Item(i)
+        
+        ' Check if it's a part
+        If oSubProduct.ReferenceProduct.Parent.Name Like "*.CATPart" Then
+            On Error Resume Next
+            Dim oPart As Part
+            Set oPart = oSubProduct.ReferenceProduct.Parent.Part
+            If Err.Number = 0 Then
+                sResults = sResults & "Part: " & oSubProduct.Name & vbCrLf
+                ProcessPart oPart, sResults
+            End If
+            On Error GoTo 0
+        ' If it's a sub-product, process recursively
+        ElseIf oSubProduct.Products.Count > 0 Then
+            ProcessProduct oSubProduct, sResults
+        End If
+    Next
+End Sub
+
+' Process a single part
+Sub ProcessPart(oPart As Part, ByRef sResults As String)
+    Dim oBody As Body
+    Dim i As Integer
+    
+    ' Process all bodies in the part
+    For i = 1 To oPart.Bodies.Count
+        Set oBody = oPart.Bodies.Item(i)
+        sResults = sResults & "  Body: " & oBody.Name & vbCrLf
+        ProcessBody oBody, sResults
+    Next
+End Sub
+
+' Process a single body
+Sub ProcessBody(oBody As Body, ByRef sResults As String)
+    Dim oShape As Shape
+    Dim oPad As Pad
+    Dim oSketch As Sketch
+    Dim i As Integer, j As Integer
+    Dim dDiameter As Double
+    Dim dLength As Double
+    Dim bFoundRod As Boolean
+    Dim oSelection As Selection
+    Dim oElement As AnyObject
+    
+    ' Get selection object
+    Set oSelection = CATIA.ActiveDocument.Selection
+    
+    bFoundRod = False
+    
+    ' Loop through all shapes in the body
+    For i = 1 To oBody.Shapes.Count
+        Set oShape = oBody.Shapes.Item(i)
+        
+        ' Check if the shape is a Pad
+        If TypeName(oShape) = "Pad" Then
+            Set oPad = oShape
+            
+            ' Get the sketch used by the pad
+            On Error Resume Next
+            Set oSketch = oPad.Sketch
+            If Err.Number = 0 Then
+                On Error GoTo 0
+                
+                ' Clear selection
+                oSelection.Clear
+                
+                ' Search for circles in the sketch by analyzing constraints
+                Dim oConstraints As Constraints
+                Dim oConstraint As Constraint
+                Dim k As Integer
+                
+                Set oConstraints = oSketch.Constraints
+                
+                For k = 1 To oConstraints.Count
+                    Set oConstraint = oConstraints.Item(k)
+                    
+                    ' Check if it's a radius constraint
+                    If oConstraint.Type = catCstTypeRadius Then
+                        ' Get the radius value
+                        dDiameter = oConstraint.Dimension.Value * 2
+                        
+                        ' Get pad length
+                        On Error Resume Next
+                        dLength = oPad.FirstLimit.Dimension.Value
+                        If Err.Number <> 0 Then
+                            Err.Clear
+                            dLength = oPad.SecondLimit.Dimension.Value
+                        End If
+                        On Error GoTo 0
+                        
+                        ' Add to results
+                        sResults = sResults & "    ROD Found:" & vbCrLf
+                        sResults = sResults & "      - Diameter: " & Round(dDiameter, 2) & " mm" & vbCrLf
+                        sResults = sResults & "      - Length: " & Round(dLength, 2) & " mm" & vbCrLf
+                        sResults = sResults & "      - Sketch: " & oSketch.Name & vbCrLf
+                        sResults = sResults & "      - Feature: " & oPad.Name & vbCrLf & vbCrLf
+                        
+                        bFoundRod = True
+                    End If
+                Next
+            End If
+            On Error GoTo 0
+        End If
+    Next
+    
+    If Not bFoundRod Then
+        sResults = sResults & "    No circular rods found in this body" & vbCrLf & vbCrLf
+    End If
+End Sub
+
+' Function to round numbers to specified decimal places
+Function Round(dValue As Double, iDecimals As Integer) As Double
+    Dim dMultiplier As Double
+    dMultiplier = 10 ^ iDecimals
+    Round = Int(dValue * dMultiplier + 0.5) / dMultiplier
+End Function
